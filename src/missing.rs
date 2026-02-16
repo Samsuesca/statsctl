@@ -1,4 +1,5 @@
 use crate::reader::DataFrame;
+use crate::utils::is_missing;
 
 /// Missing data info for one column.
 #[derive(Debug, Clone)]
@@ -10,20 +11,6 @@ pub struct MissingInfo {
     pub pct: f64,
 }
 
-/// Returns true if a value is considered missing/null.
-fn is_missing_value(val: &str) -> bool {
-    let v = val.trim();
-    v.is_empty()
-        || v == "NA"
-        || v == "na"
-        || v == "N/A"
-        || v == "null"
-        || v == "NULL"
-        || v == "."
-        || v == "NaN"
-        || v == "nan"
-}
-
 /// Analyze missing data for all columns.
 pub fn analyze(df: &DataFrame) -> Vec<MissingInfo> {
     let total = df.nrows();
@@ -32,7 +19,7 @@ pub fn analyze(df: &DataFrame) -> Vec<MissingInfo> {
         .map(|header| {
             let missing = df
                 .column(header)
-                .map(|vals| vals.iter().filter(|v| is_missing_value(v)).count())
+                .map(|vals| vals.iter().filter(|v| is_missing(v)).count())
                 .unwrap_or(0);
             let pct = if total > 0 {
                 (missing as f64 / total as f64) * 100.0
@@ -64,7 +51,7 @@ pub fn missing_patterns(df: &DataFrame) -> MissingPatternReport {
     for row in &df.rows {
         let pattern: String = row
             .iter()
-            .map(|v| if is_missing_value(v) { '1' } else { '0' })
+            .map(|v| if is_missing(v) { '1' } else { '0' })
             .collect();
 
         if pattern.contains('1') {

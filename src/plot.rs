@@ -238,6 +238,9 @@ pub fn boxplot(df: &DataFrame, col_name: &str, width: usize) -> Option<String> {
 }
 
 /// Generate an ASCII scatter plot for two numeric columns.
+///
+/// Uses a pre-computed density map (HashMap) for O(n) point placement instead of
+/// the naive O(n*m) approach of recounting density per cell for every point.
 pub fn scatter(
     df: &DataFrame,
     x_name: &str,
@@ -279,37 +282,27 @@ pub fn scatter(
     let x_range = if x_max == x_min { 1.0 } else { x_max - x_min };
     let y_range = if y_max == y_min { 1.0 } else { y_max - y_min };
 
-    // Create grid
-    let mut grid = vec![vec![' '; plot_w]; plot_h];
-
-    // Plot points
+    // Pre-compute density map in a single O(n) pass
+    let mut density: std::collections::HashMap<(usize, usize), usize> =
+        std::collections::HashMap::new();
     for (x, y) in &pairs {
         let col = ((*x - x_min) / x_range * (plot_w - 1) as f64).round() as usize;
         let row = ((y_max - *y) / y_range * (plot_h - 1) as f64).round() as usize;
         let col = col.min(plot_w - 1);
         let row = row.min(plot_h - 1);
-        grid[row][col] = if grid[row][col] == ' ' || grid[row][col] == '·' {
-            '·'
-        } else {
+        *density.entry((row, col)).or_insert(0) += 1;
+    }
+
+    // Build grid from density map
+    let mut grid = vec![vec![' '; plot_w]; plot_h];
+    for (&(row, col), &count) in &density {
+        grid[row][col] = if count > 3 {
             '●'
+        } else if count > 1 {
+            '◦'
+        } else {
+            '·'
         };
-        // Increase density marker
-        if grid[row][col] == '·' {
-            // Check how many points fall here
-            let count = pairs
-                .iter()
-                .filter(|(px, py)| {
-                    let pc = ((*px - x_min) / x_range * (plot_w - 1) as f64).round() as usize;
-                    let pr = ((y_max - *py) / y_range * (plot_h - 1) as f64).round() as usize;
-                    pc.min(plot_w - 1) == col && pr.min(plot_h - 1) == row
-                })
-                .count();
-            if count > 3 {
-                grid[row][col] = '●';
-            } else if count > 1 {
-                grid[row][col] = '◦';
-            }
-        }
     }
 
     let mut output = String::new();

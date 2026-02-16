@@ -1,5 +1,6 @@
 use crate::reader::DataFrame;
 use crate::types;
+use crate::utils::is_missing;
 
 /// Descriptive statistics for a single numeric column.
 #[derive(Debug, Clone)]
@@ -128,9 +129,7 @@ pub fn categorical_summary(df: &DataFrame, col_name: &str) -> Option<Categorical
 
     for val in &values {
         let v = val.trim();
-        if v.is_empty() || v == "NA" || v == "na" || v == "N/A" || v == "null" || v == "NULL"
-            || v == "." || v == "NaN" || v == "nan"
-        {
+        if is_missing(v) {
             missing += 1;
         } else {
             *counts.entry(v.to_string()).or_insert(0) += 1;
@@ -149,4 +148,140 @@ pub fn categorical_summary(df: &DataFrame, col_name: &str) -> Option<Categorical
         unique,
         top_values,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::reader;
+
+    #[test]
+    fn test_mean_basic() {
+        assert!((mean(&[1.0, 2.0, 3.0, 4.0, 5.0]) - 3.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_mean_single() {
+        assert!((mean(&[42.0]) - 42.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_mean_empty() {
+        assert!(mean(&[]).is_nan());
+    }
+
+    #[test]
+    fn test_mean_negative() {
+        assert!((mean(&[-2.0, -1.0, 0.0, 1.0, 2.0]) - 0.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_std_dev_known() {
+        // Population {2, 4, 4, 4, 5, 5, 7, 9} has sample std dev ~2.138
+        let data = vec![2.0, 4.0, 4.0, 4.0, 5.0, 5.0, 7.0, 9.0];
+        let sd = std_dev(&data);
+        assert!((sd - 2.13809).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_std_dev_constant() {
+        // All same values: std dev should be 0
+        assert!((std_dev(&[5.0, 5.0, 5.0, 5.0]) - 0.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_std_dev_single() {
+        assert!((std_dev(&[7.0]) - 0.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_std_dev_empty() {
+        assert!((std_dev(&[]) - 0.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_std_dev_two_values() {
+        // [0, 10]: mean=5, variance = ((5^2 + 5^2) / 1) = 50, std = sqrt(50) ~ 7.071
+        let sd = std_dev(&[0.0, 10.0]);
+        assert!((sd - 7.07107).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_percentile_median_odd() {
+        let data = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        assert!((percentile(&data, 50.0) - 3.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_percentile_median_even() {
+        let data = vec![1.0, 2.0, 3.0, 4.0];
+        assert!((percentile(&data, 50.0) - 2.5).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_percentile_q1_q3() {
+        let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
+        let q1 = percentile(&data, 25.0);
+        let q3 = percentile(&data, 75.0);
+        assert!((q1 - 2.75).abs() < 1e-10);
+        assert!((q3 - 6.25).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_percentile_min_max() {
+        let data = vec![10.0, 20.0, 30.0];
+        assert!((percentile(&data, 0.0) - 10.0).abs() < 1e-10);
+        assert!((percentile(&data, 100.0) - 30.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_percentile_empty() {
+        assert!(percentile(&[], 50.0).is_nan());
+    }
+
+    #[test]
+    fn test_percentile_single() {
+        assert!((percentile(&[42.0], 50.0) - 42.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_describe_with_missing() {
+        let df = reader::read_file("tests/data/sample.csv").unwrap();
+        let desc = describe(&df, "income").unwrap();
+        // income has 2 missing values (Eve row 5 empty, Leo row 12 NA)
+        // plus Xavier row 24 also empty
+        assert!(desc.missing > 0);
+        assert!(desc.count > 0);
+        assert!(desc.count + desc.missing == 30);
+    }
+
+    #[test]
+    fn test_describe_nonexistent_column() {
+        let df = reader::read_file("tests/data/sample.csv").unwrap();
+        assert!(describe(&df, "nonexistent").is_none());
+    }
+
+    #[test]
+    fn test_describe_all_returns_numeric_only() {
+        let df = reader::read_file("tests/data/sample.csv").unwrap();
+        let all = describe_all(&df);
+        // Should include numeric columns like id, age, income, score
+        let names: Vec<&str> = all.iter().map(|s| s.name.as_str()).collect();
+        assert!(names.contains(&"age"));
+        assert!(names.contains(&"income"));
+        assert!(names.contains(&"score"));
+        // Should NOT include categorical columns
+        assert!(!names.contains(&"name"));
+        assert!(!names.contains(&"city"));
+    }
+
+    #[test]
+    fn test_categorical_summary() {
+        let df = reader::read_file("tests/data/sample.csv").unwrap();
+        let summary = categorical_summary(&df, "city").unwrap();
+        assert!(summary.unique > 0);
+        assert_eq!(summary.total, 30);
+        // city has some missing values (Uma row 21, Ben row 28)
+        assert!(summary.missing >= 1);
+    }
 }

@@ -5,7 +5,9 @@ mod plot;
 mod reader;
 mod stats;
 mod types;
+pub mod utils;
 
+use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use std::fs;
 use std::process;
@@ -15,7 +17,18 @@ use std::process;
     name = "statsctl",
     about = "Quick statistical analysis CLI for CSV/TSV data files",
     version,
-    author = "Angel Samuel Suesca Ríos <suescapsam@gmail.com>"
+    author = "Angel Samuel Suesca Ríos <suescapsam@gmail.com>",
+    after_help = "\
+Common workflows:
+  Quick overview:      statsctl summary data.csv
+  Specific columns:    statsctl summary data.csv --vars age,income
+  All columns:         statsctl summary data.csv --all
+  Missing analysis:    statsctl missing data.csv --patterns
+  Visualize:           statsctl plot data.csv --var age --type histogram
+  Correlations:        statsctl correlation data.csv --min 0.7
+  Compare datasets:    statsctl compare train.csv test.csv
+  Export markdown:     statsctl summary data.csv -o report.md
+  Pipe from stdin:     cat data.csv | statsctl summary --stdin"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -25,6 +38,25 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     /// Descriptive statistics for numeric columns
+    #[command(long_about = "\
+Compute descriptive statistics (count, mean, std, min, Q1, median, Q3, max) for \
+numeric columns in a CSV/TSV file. Use --all to also include categorical summaries.
+
+Examples:
+  statsctl summary data.csv
+      Describe all numeric columns in data.csv
+
+  statsctl summary data.csv --vars age,income,score
+      Describe only the specified columns
+
+  statsctl summary data.csv --all
+      Include categorical variable summaries (top values, unique counts)
+
+  statsctl summary data.csv -o report.md
+      Export the summary table to a Markdown file
+
+  cat data.csv | statsctl summary --stdin
+      Read data from a piped command via stdin")]
     Summary {
         /// Path to the CSV/TSV file
         file: Option<String>,
@@ -47,6 +79,25 @@ enum Commands {
     },
 
     /// Missing data analysis
+    #[command(long_about = "\
+Analyze missing data across all columns, showing counts and percentages. \
+Use --patterns to reveal co-occurrence patterns of missingness.
+
+Examples:
+  statsctl missing data.csv
+      Show missing counts for every column
+
+  statsctl missing data.csv --only-missing
+      Show only columns that have at least one missing value
+
+  statsctl missing data.csv --patterns
+      Show which columns tend to be missing together (co-occurrence patterns)
+
+  statsctl missing data.csv --patterns -o missing_report.md
+      Export the full missing data report to Markdown
+
+  statsctl missing survey_responses.tsv --only-missing --patterns
+      Combine filters: only missing columns with pattern analysis")]
     Missing {
         /// Path to the CSV/TSV file
         file: String,
@@ -65,6 +116,25 @@ enum Commands {
     },
 
     /// Correlation matrix for numeric variables
+    #[command(long_about = "\
+Compute the Pearson correlation matrix for numeric columns using pairwise \
+complete observations. Highlights high correlations with color coding.
+
+Examples:
+  statsctl correlation data.csv
+      Full correlation matrix for all numeric columns
+
+  statsctl correlation data.csv --vars age,income,score
+      Correlation matrix for selected columns only
+
+  statsctl correlation data.csv --min 0.7
+      Highlight pairs with |r| >= 0.7
+
+  statsctl correlation data.csv --min 0.3 -o corr.json
+      Export correlations as JSON with a lower threshold
+
+  statsctl correlation wide_dataset.csv --vars x1,x2,x3,x4,x5
+      Focused correlation analysis on a subset of features")]
     Correlation {
         /// Path to the CSV/TSV file
         file: String,
@@ -83,6 +153,25 @@ enum Commands {
     },
 
     /// Quick ASCII plots
+    #[command(long_about = "\
+Generate ASCII-art visualizations directly in the terminal. Supports histograms, \
+boxplots, and scatter plots for quick exploratory data analysis.
+
+Examples:
+  statsctl plot data.csv --var age --type histogram
+      Histogram of the age column
+
+  statsctl plot data.csv --var income --type boxplot
+      Boxplot showing quartiles and outliers for income
+
+  statsctl plot data.csv --vars age,income --type scatter
+      Scatter plot of age (x) vs income (y)
+
+  statsctl plot data.csv --var score --type hist -o plot.txt
+      Save a histogram to a text file
+
+  statsctl plot data.csv --var income --type box
+      Shorthand: 'hist' and 'box' are accepted aliases")]
     Plot {
         /// Path to the CSV/TSV file
         file: String,
@@ -105,6 +194,19 @@ enum Commands {
     },
 
     /// Infer and display data types
+    #[command(long_about = "\
+Analyze each column and infer its data type (Numeric, Boolean, or Categorical). \
+Optionally display the unique levels for categorical and boolean columns.
+
+Examples:
+  statsctl types data.csv
+      Show inferred type and unique count for every column
+
+  statsctl types data.csv --show-levels
+      Also display the distinct values for categorical/boolean columns
+
+  statsctl types survey.tsv
+      Works with tab-separated files as well")]
     Types {
         /// Path to the CSV/TSV file
         file: String,
@@ -115,6 +217,23 @@ enum Commands {
     },
 
     /// Compare two datasets
+    #[command(long_about = "\
+Side-by-side comparison of descriptive statistics and missing data between two \
+CSV/TSV files. Useful for comparing train/test splits, before/after transformations, \
+or different time periods.
+
+Examples:
+  statsctl compare train.csv test.csv
+      Compare all numeric columns between two files
+
+  statsctl compare train.csv test.csv --vars age,income
+      Compare only specific columns
+
+  statsctl compare before.csv after.csv -o comparison.md
+      Export the comparison report to Markdown
+
+  statsctl compare 2023_data.csv 2024_data.csv --vars revenue,users
+      Compare specific metrics across yearly snapshots")]
     Compare {
         /// First file path
         file1: String,
@@ -172,23 +291,23 @@ fn main() {
     };
 
     if let Err(e) = result {
-        eprintln!("Error: {}", e);
+        eprintln!("Error: {:#}", e);
         process::exit(1);
     }
 }
 
-fn load_data(file: Option<&str>, stdin: bool) -> Result<reader::DataFrame, String> {
+fn load_data(file: Option<&str>, stdin: bool) -> Result<reader::DataFrame> {
     if stdin {
         reader::read_stdin()
     } else {
         match file {
             Some(path) => reader::read_file(path),
-            None => Err("No file specified. Use --stdin to read from stdin.".to_string()),
+            None => bail!("No file specified. Use --stdin to read from stdin."),
         }
     }
 }
 
-fn write_output(content: &str, output: Option<&str>) -> Result<(), String> {
+fn write_output(content: &str, output: Option<&str>) -> Result<()> {
     match output {
         Some(path) => {
             // Determine format from extension
@@ -200,7 +319,8 @@ fn write_output(content: &str, output: Option<&str>) -> Result<(), String> {
                 "md"
             };
             let exported = display::export_output(content, format);
-            fs::write(path, &exported).map_err(|e| format!("Cannot write to '{}': {}", path, e))?;
+            fs::write(path, &exported)
+                .with_context(|| format!("Cannot write to '{}'", path))?;
             println!("Output written to: {}", path);
             Ok(())
         }
@@ -226,7 +346,7 @@ fn cmd_summary(
     all: bool,
     output: Option<String>,
     stdin: bool,
-) -> Result<(), String> {
+) -> Result<()> {
     let df = load_data(file.as_deref(), stdin)?;
     let selected = parse_vars(&vars);
 
@@ -277,7 +397,7 @@ fn cmd_missing(
     only_missing_flag: bool,
     patterns: bool,
     output: Option<String>,
-) -> Result<(), String> {
+) -> Result<()> {
     let df = reader::read_file(file)?;
     let infos = missing::analyze(&df);
 
@@ -304,20 +424,7 @@ fn cmd_missing(
         let rows_with_any_missing = df
             .rows
             .iter()
-            .filter(|row| {
-                row.iter().any(|v| {
-                    let val = v.trim();
-                    val.is_empty()
-                        || val == "NA"
-                        || val == "na"
-                        || val == "N/A"
-                        || val == "null"
-                        || val == "NULL"
-                        || val == "."
-                        || val == "NaN"
-                        || val == "nan"
-                })
-            })
+            .filter(|row| row.iter().any(|v| utils::is_missing(v)))
             .count();
 
         if rows_with_any_missing > 0 && total > 0 {
@@ -337,7 +444,7 @@ fn cmd_correlation(
     vars: Option<String>,
     min_threshold: f64,
     output: Option<String>,
-) -> Result<(), String> {
+) -> Result<()> {
     let df = reader::read_file(file)?;
     let selected = parse_vars(&vars);
 
@@ -349,7 +456,7 @@ fn cmd_correlation(
     };
 
     if cm.columns.is_empty() {
-        return Err("No numeric columns found for correlation analysis.".to_string());
+        bail!("No numeric columns found for correlation analysis.");
     }
 
     let mut result = display::format_correlation(&cm);
@@ -366,48 +473,48 @@ fn cmd_plot(
     vars: Option<String>,
     plot_type: &str,
     output: Option<String>,
-) -> Result<(), String> {
+) -> Result<()> {
     let df = reader::read_file(file)?;
 
     let result = match plot_type {
         "histogram" | "hist" => {
             let col = var
                 .or_else(|| vars.as_ref().and_then(|v| v.split(',').next().map(|s| s.trim().to_string())))
-                .ok_or("Please specify a column with --var")?;
+                .context("Please specify a column with --var")?;
             plot::histogram(&df, &col, 50, 12)
-                .ok_or(format!("Cannot create histogram for column '{}'", col))?
+                .with_context(|| format!("Cannot create histogram for column '{}'", col))?
         }
         "boxplot" | "box" => {
             let col = var
                 .or_else(|| vars.as_ref().and_then(|v| v.split(',').next().map(|s| s.trim().to_string())))
-                .ok_or("Please specify a column with --var")?;
+                .context("Please specify a column with --var")?;
             plot::boxplot(&df, &col, 50)
-                .ok_or(format!("Cannot create boxplot for column '{}'", col))?
+                .with_context(|| format!("Cannot create boxplot for column '{}'", col))?
         }
         "scatter" => {
-            let cols = vars.ok_or("Please specify two columns with --vars x,y")?;
+            let cols = vars.context("Please specify two columns with --vars x,y")?;
             let parts: Vec<&str> = cols.split(',').map(|s| s.trim()).collect();
             if parts.len() < 2 {
-                return Err("Scatter plot requires two columns: --vars x,y".to_string());
+                bail!("Scatter plot requires two columns: --vars x,y");
             }
             plot::scatter(&df, parts[0], parts[1], 50, 15)
-                .ok_or(format!(
+                .with_context(|| format!(
                     "Cannot create scatter plot for columns '{}' and '{}'",
                     parts[0], parts[1]
                 ))?
         }
         _ => {
-            return Err(format!(
+            bail!(
                 "Unknown plot type '{}'. Use: histogram, boxplot, scatter",
                 plot_type
-            ));
+            );
         }
     };
 
     write_output(&result, output.as_deref())
 }
 
-fn cmd_types(file: &str, show_levels: bool) -> Result<(), String> {
+fn cmd_types(file: &str, show_levels: bool) -> Result<()> {
     let df = reader::read_file(file)?;
     let type_infos = types::infer_types(&df);
     let result = display::format_types(&type_infos, show_levels);
@@ -420,7 +527,7 @@ fn cmd_compare(
     file2: &str,
     vars: Option<String>,
     output: Option<String>,
-) -> Result<(), String> {
+) -> Result<()> {
     let df1 = reader::read_file(file1)?;
     let df2 = reader::read_file(file2)?;
 

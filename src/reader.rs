@@ -1,5 +1,6 @@
-use std::fs::File;
-use std::io::{self, BufRead, BufReader, Read};
+use crate::utils::is_missing;
+use anyhow::{bail, Context, Result};
+use std::io::{self, Read};
 
 /// Represents a parsed dataset with headers and rows of string values.
 #[derive(Debug, Clone)]
@@ -40,10 +41,7 @@ impl DataFrame {
                 .iter()
                 .map(|row| {
                     let val = row[idx].trim();
-                    if val.is_empty() || val == "NA" || val == "na" || val == "N/A"
-                        || val == "null" || val == "NULL" || val == "."
-                        || val == "NaN" || val == "nan"
-                    {
+                    if is_missing(val) {
                         None
                     } else {
                         val.parse::<f64>().ok()
@@ -86,45 +84,36 @@ fn detect_delimiter(first_line: &str) -> u8 {
     }
 }
 
-/// Reads a CSV/TSV file into a DataFrame.
-pub fn read_file(path: &str) -> Result<DataFrame, String> {
-    let file = File::open(path).map_err(|e| format!("Cannot open file '{}': {}", path, e))?;
-    let mut buf_reader = BufReader::new(file);
-
-    // Read first line to detect delimiter
-    let mut first_line = String::new();
-    buf_reader
-        .read_line(&mut first_line)
-        .map_err(|e| format!("Cannot read file '{}': {}", path, e))?;
-
+/// Parse CSV/TSV content from a string buffer into a DataFrame.
+fn parse_csv(content: &str) -> Result<DataFrame> {
+    let first_line = content.lines().next().unwrap_or("");
     if first_line.trim().is_empty() {
-        return Err(format!("File '{}' is empty", path));
+        bail!("Input data is empty");
     }
 
-    let delimiter = detect_delimiter(&first_line);
+    let delimiter = detect_delimiter(first_line);
 
-    // Re-open file for csv reader
-    let file = File::open(path).map_err(|e| format!("Cannot open file '{}': {}", path, e))?;
     let mut rdr = csv::ReaderBuilder::new()
         .delimiter(delimiter)
         .flexible(true)
         .has_headers(true)
-        .from_reader(file);
+        .from_reader(content.as_bytes());
 
     let headers: Vec<String> = rdr
         .headers()
-        .map_err(|e| format!("Cannot read headers: {}", e))?
+        .context("Cannot read headers")?
         .iter()
         .map(|h| h.trim().to_string())
         .collect();
 
     if headers.is_empty() {
-        return Err("No columns found in file".to_string());
+        bail!("No columns found in input");
     }
 
     let mut rows: Vec<Vec<String>> = Vec::new();
     for result in rdr.records() {
-        let record = result.map_err(|e| format!("Error reading row {}: {}", rows.len() + 1, e))?;
+        let record = result
+            .with_context(|| format!("Error reading row {}", rows.len() + 1))?;
         let mut row: Vec<String> = record.iter().map(|f| f.trim().to_string()).collect();
         // Pad short rows with empty strings
         while row.len() < headers.len() {
@@ -138,44 +127,140 @@ pub fn read_file(path: &str) -> Result<DataFrame, String> {
     Ok(DataFrame { headers, rows })
 }
 
+/// Reads a CSV/TSV file into a DataFrame.
+///
+/// The file is read once into memory and then parsed, avoiding a double file open.
+pub fn read_file(path: &str) -> Result<DataFrame> {
+    let content = std::fs::read_to_string(path)
+        .with_context(|| format!("Cannot open file '{}'", path))?;
+
+    if content.trim().is_empty() {
+        bail!("File '{}' is empty", path);
+    }
+
+    parse_csv(&content)
+        .with_context(|| format!("Failed to parse '{}'", path))
+}
+
 /// Reads from stdin into a DataFrame.
-pub fn read_stdin() -> Result<DataFrame, String> {
+pub fn read_stdin() -> Result<DataFrame> {
     let stdin = io::stdin();
     let mut input = String::new();
     stdin
         .lock()
         .read_to_string(&mut input)
-        .map_err(|e| format!("Cannot read stdin: {}", e))?;
+        .context("Cannot read stdin")?;
 
     if input.trim().is_empty() {
-        return Err("No data received from stdin".to_string());
+        bail!("No data received from stdin");
     }
 
-    let delimiter = detect_delimiter(input.lines().next().unwrap_or(""));
+    parse_csv(&input).context("Failed to parse stdin input")
+}
 
-    let mut rdr = csv::ReaderBuilder::new()
-        .delimiter(delimiter)
-        .flexible(true)
-        .has_headers(true)
-        .from_reader(input.as_bytes());
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-    let headers: Vec<String> = rdr
-        .headers()
-        .map_err(|e| format!("Cannot read headers: {}", e))?
-        .iter()
-        .map(|h| h.trim().to_string())
-        .collect();
-
-    let mut rows: Vec<Vec<String>> = Vec::new();
-    for result in rdr.records() {
-        let record = result.map_err(|e| format!("Error reading row: {}", e))?;
-        let mut row: Vec<String> = record.iter().map(|f| f.trim().to_string()).collect();
-        while row.len() < headers.len() {
-            row.push(String::new());
-        }
-        row.truncate(headers.len());
-        rows.push(row);
+    #[test]
+    fn test_detect_delimiter_comma() {
+        assert_eq!(detect_delimiter("a,b,c"), b',');
     }
 
-    Ok(DataFrame { headers, rows })
+    #[test]
+    fn test_detect_delimiter_tab() {
+        assert_eq!(detect_delimiter("a\tb\tc"), b'\t');
+    }
+
+    #[test]
+    fn test_detect_delimiter_mixed_more_tabs() {
+        assert_eq!(detect_delimiter("a,b\tc\td\te"), b'\t');
+    }
+
+    #[test]
+    fn test_detect_delimiter_empty() {
+        assert_eq!(detect_delimiter(""), b',');
+    }
+
+    #[test]
+    fn test_parse_csv_basic() {
+        let data = "name,age,score\nAlice,25,85\nBob,34,72\n";
+        let df = parse_csv(data).unwrap();
+        assert_eq!(df.headers, vec!["name", "age", "score"]);
+        assert_eq!(df.nrows(), 2);
+        assert_eq!(df.ncols(), 3);
+    }
+
+    #[test]
+    fn test_parse_csv_tsv() {
+        let data = "name\tage\tscore\nAlice\t25\t85\nBob\t34\t72\n";
+        let df = parse_csv(data).unwrap();
+        assert_eq!(df.headers, vec!["name", "age", "score"]);
+        assert_eq!(df.nrows(), 2);
+    }
+
+    #[test]
+    fn test_parse_csv_empty() {
+        let data = "";
+        assert!(parse_csv(data).is_err());
+    }
+
+    #[test]
+    fn test_parse_csv_headers_only() {
+        let data = "name,age,score\n";
+        let df = parse_csv(data).unwrap();
+        assert_eq!(df.nrows(), 0);
+        assert_eq!(df.ncols(), 3);
+    }
+
+    #[test]
+    fn test_dataframe_column() {
+        let data = "name,age\nAlice,25\nBob,34\n";
+        let df = parse_csv(data).unwrap();
+        let col = df.column("name").unwrap();
+        assert_eq!(col, vec!["Alice", "Bob"]);
+    }
+
+    #[test]
+    fn test_dataframe_numeric_column() {
+        let data = "name,age\nAlice,25\nBob,NA\nCarol,30\n";
+        let df = parse_csv(data).unwrap();
+        let col = df.numeric_column("age").unwrap();
+        assert_eq!(col, vec![Some(25.0), None, Some(30.0)]);
+    }
+
+    #[test]
+    fn test_dataframe_valid_numeric_column() {
+        let data = "name,age\nAlice,25\nBob,NA\nCarol,30\n";
+        let df = parse_csv(data).unwrap();
+        let col = df.valid_numeric_column("age").unwrap();
+        assert_eq!(col, vec![25.0, 30.0]);
+    }
+
+    #[test]
+    fn test_dataframe_missing_column() {
+        let data = "name,age\nAlice,25\n";
+        let df = parse_csv(data).unwrap();
+        assert!(df.column("nonexistent").is_none());
+    }
+
+    #[test]
+    fn test_read_file_real() {
+        let df = read_file("tests/data/sample.csv").unwrap();
+        assert_eq!(df.ncols(), 8);
+        assert_eq!(df.nrows(), 30);
+    }
+
+    #[test]
+    fn test_read_file_nonexistent() {
+        assert!(read_file("nonexistent.csv").is_err());
+    }
+
+    #[test]
+    fn test_short_row_padding() {
+        let data = "a,b,c\n1,2\n4,5,6\n";
+        let df = parse_csv(data).unwrap();
+        assert_eq!(df.rows[0].len(), 3);
+        assert_eq!(df.rows[0][2], "");
+    }
 }

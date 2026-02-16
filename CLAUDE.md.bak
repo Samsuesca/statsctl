@@ -1,0 +1,59 @@
+# statsctl - System statistics monitoring
+
+> macOS command-line utility (Rust)
+
+## Project Overview
+
+**Type:** Command-line utility (Rust)
+**Purpose:** System statistics monitoring
+**Platform:** macOS (Apple Silicon & Intel)
+
+## Features
+
+- CPU usage and load averages
+- Memory usage (RAM, swap)
+- Disk I/O statistics
+- Network bandwidth monitoring
+- Process statistics
+- Historical data tracking
+
+## Development
+
+```bash
+# Build
+cargo build
+
+# Run
+cargo run -- [ARGS]
+
+# Test
+cargo test
+
+# Format and lint
+cargo fmt
+cargo clippy
+
+# Build release
+cargo build --release
+```
+
+## Installation
+
+```bash
+# Install locally
+cargo install --path .
+
+# Build and copy to system
+cargo build --release
+cp target/release/statsctl /usr/local/bin/
+```
+
+## Usage
+
+```bash
+# Show help
+statsctl --help
+
+# Show version
+statsctl --version
+```

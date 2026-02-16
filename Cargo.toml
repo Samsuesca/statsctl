@@ -1,6 +1,6 @@
 [package]
 name = "statsctl"
-version = "0.1.0"
+version = "1.0.1"
 edition = "2021"
 authors = ["Angel Samuel Suesca Ríos <suescapsam@gmail.com>"]
 description = "Quick statistical analysis CLI for CSV/TSV data files"
@@ -11,6 +11,7 @@ name = "statsctl"
 path = "src/main.rs"
 
 [dependencies]
+anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 csv = "1"
 serde = { version = "1", features = ["derive"] }
@@ -21,3 +22,6 @@ tabled = "0.17"
 [profile.release]
 opt-level = 3
 lto = true
+strip = true
+codegen-units = 1
+panic = "abort"

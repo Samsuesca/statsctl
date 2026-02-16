@@ -1,0 +1,42 @@
+{
+  "name": "statsctl",
+  "version": "1.0.1",
+  "previous_versions": ["0.1.0"],
+  "edition": "2021",
+  "target": "aarch64-apple-darwin",
+  "repository": "https://github.com/Samsuesca/statsctl",
+  "author": "Angel Samuel Suesca Rios <suescapsam@gmail.com>",
+  "build": {
+    "lto": true,
+    "strip": true,
+    "opt_level": 3,
+    "codegen_units": 1,
+    "panic": "abort",
+    "binary_size": "991 KB"
+  },
+  "platform": {
+    "primary": "macOS (Apple Silicon M3)",
+    "supported": ["macOS", "Linux", "Windows"]
+  },
+  "features": [
+    "Descriptive statistics (mean, std, percentiles)",
+    "Missing data analysis with patterns",
+    "Pearson correlation matrix",
+    "ASCII plots (histogram, boxplot, scatter)",
+    "Type inference (numeric, boolean, categorical)",
+    "Dataset comparison",
+    "Export to Markdown, JSON, CSV"
+  ],
+  "changelog": {
+    "1.0.1": [
+      "Added strip, codegen-units=1, panic=abort for smaller binary",
+      "Unified is_missing() into shared utils module",
+      "Fixed double file open in reader (single buffer read)",
+      "Optimized scatter plot from O(n*m) to O(n) density map",
+      "Migrated error handling from String to anyhow",
+      "Added unit tests for core statistical functions",
+      "Added comprehensive help text with examples",
+      "Added versions.json for version tracking"
+    ]
+  }
+}

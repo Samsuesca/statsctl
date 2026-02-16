@@ -1,4 +1,5 @@
 use crate::reader::DataFrame;
+use crate::utils::is_missing;
 
 /// Inferred type for a column.
 #[derive(Debug, Clone, PartialEq)]
@@ -25,20 +26,6 @@ pub struct ColumnTypeInfo {
     pub col_type: ColumnType,
     pub unique_count: usize,
     pub levels: Vec<String>,
-}
-
-/// Returns true if a value looks like a missing/null value.
-fn is_missing(val: &str) -> bool {
-    let v = val.trim();
-    v.is_empty()
-        || v == "NA"
-        || v == "na"
-        || v == "N/A"
-        || v == "null"
-        || v == "NULL"
-        || v == "."
-        || v == "NaN"
-        || v == "nan"
 }
 
 /// Returns true if all non-missing values look boolean.
@@ -120,4 +107,112 @@ pub fn numeric_columns(df: &DataFrame) -> Vec<String> {
         .filter(|info| info.col_type == ColumnType::Numeric)
         .map(|info| info.name)
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::reader;
+
+    #[test]
+    fn test_is_boolean_true_false() {
+        assert!(is_boolean(&["true", "false", "true", "false"]));
+    }
+
+    #[test]
+    fn test_is_boolean_yes_no() {
+        assert!(is_boolean(&["yes", "no", "YES", "NO"]));
+    }
+
+    #[test]
+    fn test_is_boolean_01() {
+        assert!(is_boolean(&["0", "1", "1", "0"]));
+    }
+
+    #[test]
+    fn test_is_boolean_with_missing() {
+        assert!(is_boolean(&["true", "NA", "false", ""]));
+    }
+
+    #[test]
+    fn test_is_boolean_mixed_not_bool() {
+        assert!(!is_boolean(&["true", "maybe", "false"]));
+    }
+
+    #[test]
+    fn test_is_boolean_empty() {
+        assert!(!is_boolean(&[]));
+    }
+
+    #[test]
+    fn test_is_boolean_all_missing() {
+        assert!(!is_boolean(&["NA", "", "null"]));
+    }
+
+    #[test]
+    fn test_is_numeric_integers() {
+        assert!(is_numeric(&["1", "2", "3", "100"]));
+    }
+
+    #[test]
+    fn test_is_numeric_floats() {
+        assert!(is_numeric(&["1.5", "2.7", "3.14"]));
+    }
+
+    #[test]
+    fn test_is_numeric_with_missing() {
+        assert!(is_numeric(&["1", "NA", "3", ""]));
+    }
+
+    #[test]
+    fn test_is_numeric_mostly_numeric() {
+        // 80% threshold: 4 out of 5 non-missing are numeric
+        assert!(is_numeric(&["1", "2", "3", "4", "hello"]));
+    }
+
+    #[test]
+    fn test_is_numeric_text() {
+        assert!(!is_numeric(&["hello", "world", "foo"]));
+    }
+
+    #[test]
+    fn test_is_numeric_all_missing() {
+        assert!(!is_numeric(&["NA", "", "null"]));
+    }
+
+    #[test]
+    fn test_infer_types_sample_csv() {
+        let df = reader::read_file("tests/data/sample.csv").unwrap();
+        let types = infer_types(&df);
+
+        let find = |name: &str| -> &ColumnTypeInfo {
+            types.iter().find(|t| t.name == name).unwrap()
+        };
+
+        assert_eq!(find("age").col_type, ColumnType::Numeric);
+        assert_eq!(find("income").col_type, ColumnType::Numeric);
+        assert_eq!(find("score").col_type, ColumnType::Numeric);
+        assert_eq!(find("name").col_type, ColumnType::Categorical);
+        assert_eq!(find("city").col_type, ColumnType::Categorical);
+        assert_eq!(find("gender").col_type, ColumnType::Categorical);
+        assert_eq!(find("employed").col_type, ColumnType::Boolean);
+    }
+
+    #[test]
+    fn test_numeric_columns() {
+        let df = reader::read_file("tests/data/sample.csv").unwrap();
+        let nums = numeric_columns(&df);
+        assert!(nums.contains(&"age".to_string()));
+        assert!(nums.contains(&"income".to_string()));
+        assert!(nums.contains(&"score".to_string()));
+        assert!(!nums.contains(&"name".to_string()));
+        assert!(!nums.contains(&"employed".to_string()));
+    }
+
+    #[test]
+    fn test_column_type_display() {
+        assert_eq!(format!("{}", ColumnType::Numeric), "Numeric");
+        assert_eq!(format!("{}", ColumnType::Boolean), "Boolean");
+        assert_eq!(format!("{}", ColumnType::Categorical), "Categorical");
+    }
 }
